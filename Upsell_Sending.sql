@@ -1,137 +1,74 @@
-SELECT          LM.MemberID,
-                LM.Email,
-                LM.FirstName,
-                LM.LastName, 
-                LM.JoinDate, 
-                LM.Status, 
-                LM.CurrentTier,
-                LM.CurrentPoints, 
-                
-                /* POINTS,SPENDING AND VISITS */
-                ISNULL(T6.Points_6m, 0) AS Points_6m,
-                ISNULL(T12.Points_12m, 0) AS Points_12m,
-                ISNULL(T6.Spend_6m, 0) AS Spend_6m,
-                ISNULL(T12.Spend_12m, 0) AS Spend_12m,
-                ISNULL(T6.Visits_6m, 0) AS Visits_6m,
-                ISNULL(T12.Visits_12m, 0) AS Visits_12m,
-                
-                
-                /* POINTS NEEDED FOR NEXT TIER */
-                CASE
-                      WHEN LM.CurrentTier = 'Platinum' THEN 0
-                      ELSE TM.MaxPoints + 1 - LM.CurrentPoints
-                END AS PointsToNextTier, 
-                
-                /* LAST TRANSACTION */
-                LT.LastTransactionDate, 
-                DATEDIFF(D, LT.LastTransactionDate, '2025-10-10') AS DaysSinceLastPurchase, 
-                
-                /* LAST VISITED PROPERTY */
-                LV.PropertyID AS LastVisitedPropertyID, 
-                PD.PropertyName AS LastVisitedPropertyName, 
-                
-                
-                /* APP LOGIN AND UPDATE DATE */
-                APP.LastAppLoginDate, 
-                
-                 /* LAST UPDATED */
-                 '2025-10-10' AS LastUpdated
+SELECT            CB.ContactKey, 
+                  CB.EmailAddress, 
+                  
+                  /* CURRENT PLAN */
+                  PM.PlanID AS Last_PlanID, 
+                  PM.PlanName AS Last_PlanName, 
+                  PM.DataGB AS Last_DataGB, 
+                  PM.Price AS Last_Price, 
+                  
+                  /* UPGRADE PLAN A */
+                  A.PlanID AS UpgradeA_PlanID, 
+                  A.PlanName AS UpgradeA_Name, 
+                  A.DataGB AS UpgradeA_DataGB, 
+                  A.Price AS UpgradeA_Price, 
+                  
+                   /* UPGRADE A - DATA AND PRICE DIFFERENCE */
+                  (A.DataGB - PM.DataGB) AS UpgradeA_DataDiff, 
+                  (A.Price - PM.Price) AS UpgradeA_PriceDiff, 
+                  
+                  /* PERSONALIZED UPGRADE A LINK */
+                  CONCAT(A.DeepLinkBase,'&ck=',CB.ContactKey) AS UpgradeA_URL,
+                  
+                  /* UPGRADE PLAN B */
+                  B.PlanID AS UpgradeB_PlanID, 
+                  B.PlanName AS UpgradeB_Name, 
+                  B.DataGB AS UpgradeB_DataGB, 
+                  B.Price AS UpgradeB_Price,
+                  
+                  /* UPGRADE B - DATA AND PRICE DIFFERENCE */
+                  (B.DataGB - PM.DataGB) AS UpgradeB_DataDiff, 
+                  (B.Price - PM.Price) AS UpgradeB_PriceDiff, 
+                  
+                  /* PERSONALIZED UPGRADE B LINK */
+                  CONCAT(B.DeepLinkBase,'&ck=',CB.ContactKey) AS UpgradeB_URL,
+                  
+                  /* RECOMMENDED PLAN BASED ON DATA USAGE */
+                  CASE
+                         WHEN CB.AvgDataUsageGB90 > A.DataGB
+                         THEN B.PlanID
+                         ELSE A.PlanID
+                  END AS RecommendedPlan
+                  
+FROM              [CustomerBase] CB
 
-FROM            [Loyalty_Members_StayBright] LM
+/* MATCH CUSTOMER'S CURRENT PLAN */
+INNER JOIN        [PlanMatrix] PM
+ON                CB.LastPlanID = PM.PlanID
 
-/* LAST 6 MONTHS TRANSACTIONS */
-LEFT JOIN     (
-                     SELECT     T.MemberID,
-                                SUM(PointsEarned) AS Points_6m,
-                                SUM(Amount) AS Spend_6m,
-                                SUM(CASE
-                                            WHEN Channel = 'in_property' THEN 1
-                                            ELSE 0
-                                    END 
-                                    )       AS Visits_6m
-                      FROM      [Loyalty_Transactions_StayBright] T
-                      WHERE     TransactionDate >= DATEADD(M, -6, '2025-10-10')
-                      AND       TransactionDate <= '2025-10-10'
-                      GROUP BY  MemberID
+/* GET UPGRADE PLAN A DETAILS */
+INNER JOIN        [PlanMatrix] A
+ON                PM.UpgradeA_PlanID = A.PlanID
 
-                )     AS        T6 
-ON                              LM.MemberID = T6.MemberID
+/* GET UPGRADE PLAN B DETAILS */
+INNER JOIN        [PlanMatrix] B
+ON                PM.UpgradeB_PlanID = B.PlanID
 
-/* LAST 12 MONTHS TRANSACTIONS */                  
- LEFT JOIN    (
-                     SELECT     T.MemberID,
-                                SUM(PointsEarned) AS Points_12m,
-                                SUM(Amount) AS Spend_12m,
-                                SUM(CASE
-                                            WHEN Channel = 'in_property' THEN 1
-                                            ELSE 0
-                                    END
-                                    )       AS Visits_12m
-                      FROM      [Loyalty_Transactions_StayBright] T
-                      WHERE     TransactionDate >= DATEADD(M, -12, '2025-10-10')
-                      AND       TransactionDate <= '2025-10-10'
-                      GROUP BY  MemberID
+/* ONLY ACTIVE CUSTOMERS */
+WHERE             CB.LifecycleStatus = 'Active'
 
-                )     AS        T12 
-ON                              LM.MemberID = T12.MemberID     
+/* HAVE OPTED INTO EMAILS */
+AND               CB.EmailOptIn = 1 
 
-/* LAST TRANSACTION DATE */
-LEFT JOIN     (
-                     SELECT     T.MemberID,
-                                MAX(T.TransactionDate) AS LastTransactionDate
-                     FROM       [Loyalty_Transactions_StayBright] T
-                     WHERE      T.TransactionDate <= '2025-10-10'
-                     GROUP BY   T.MemberID
-
-                )    AS         LT
-ON                              LM.MemberID = LT.MemberID
-
-/* LAST VISITED PROPERTY */   
-LEFT JOIN (
-                     SELECT      T.MemberID,
-                                 T.PropertyID
-                     FROM        [Loyalty_Transactions_StayBright] T
-                     WHERE       T.Channel = 'in_property'
-                     AND         T.TransactionDate <= '2025-10-10'
-
-                     AND NOT EXISTS (
-                                             SELECT 1
-                                             FROM   [Loyalty_Transactions_StayBright] T2
-
-                     WHERE                   T2.MemberID = T.MemberID
-                     AND                     T2.Channel = 'in_property'
-                     AND                     T2.TransactionDate <= '2025-10-10'
-                     AND              (
-                                             T2.TransactionDate > T.TransactionDate
-                     OR                  (
-                                              T2.TransactionDate = T.TransactionDate
-                    AND                       T2.TransactionID > T.TransactionID
-                )
-            )
-      )
-
-)                   AS              LV
-ON                                  LM.MemberID = LV.MemberID
+/* DON'T HAVE LOW SPEND (ARPU<10) */
+AND               CB.ARPU >= 10
 
 
-/* LAST VISITED PROPERTY NAME */
-LEFT JOIN           [Property_Dictionary] PD
-ON                  LV.PropertyID = PD.PropertyID
+/* DON'T HAVE PLAN IDS -P120, P145, P098, P119 */
+AND              PM.PlanID NOT IN ('P120', 'P145', 'P098', 'P119')
 
-/* LAST APP LOGIN */
-LEFT JOIN (
-                    SELECT          AE.MemberID,
-                                    MAX(AE.EventDate) AS LastAppLoginDate
-                    FROM            [App_Events] AE
-                    WHERE           AE.EventType = 'app_login'
-                    AND             AE.EventDate <= '2025-10-10'
-                    GROUP BY        AE.MemberID
-
-           )        AS               APP
-ON                                  LM.MemberID = APP.MemberID
-
-/* TIER INFORMATION */
-LEFT JOIN                           [Tier_Matrix] TM
-ON                                  LM.CurrentTier = TM.TierName
+/* ARE NOT LINKED TO BLOCKED UPGRADE PLANS -P120, P200 */
+AND              A.PlanID NOT IN ('P120', 'P200')
+AND              B.PlanID NOT IN ('P120', 'P200')
 
 
