@@ -133,3 +133,5 @@ ON                                  LM.MemberID = APP.MemberID
 /* TIER INFORMATION */
 LEFT JOIN                           [Tier_Matrix] TM
 ON                                  LM.CurrentTier = TM.TierName
+
+
